@@ -1,23 +1,41 @@
 // ─────────────────────────────────────────────────────────────
-// CPC TYPES — Shared data contracts
-// Used by: /api/analyze, /api/export, frontend components
+// CPC TYPES v2.0 — Shared data contracts
 // ─────────────────────────────────────────────────────────────
 
 // ── Request ──────────────────────────────────────────────────
 
 export interface AnalyzeRequest {
-  decision: string;           // Decision under analysis
-  verbatims: string[];        // Raw participant statements (1–10)
-  participants?: number;      // Optional headcount
-  context?: string;           // Optional session context
-  session_id?: string;        // Optional — generated if absent
+  decision: string;
+  verbatims: string[];
+  participants?: number;
+  context?: string;
+  session_id?: string;
 }
 
-// ── GPT Output (mirrors the JSON schema in cpc-prompt.ts) ────
+// ── Enums ─────────────────────────────────────────────────────
 
 export type VulnerabilityLevel = "low" | "moderate" | "high" | "critical";
 export type Severity = "moderate" | "high" | "critical";
 export type Timeline = "immediate" | "short_term" | "medium_term";
+export type ResilienceLevel = "very_low" | "low" | "moderate" | "high";
+export type DegradationTrajectory = "stable" | "degrading" | "accelerating_collapse";
+export type BiasCategory = "cognitive" | "group" | "organizational";
+export type ContradictionType = "resource" | "temporal" | "epistemic" | "structural" | "political";
+export type SourceLayer = "bias" | "social_dynamic" | "blindspot" | "contradiction";
+
+export type EpistemicType =
+  | "observed_fact"
+  | "interpretation"
+  | "assumption"
+  | "prediction"
+  | "emotional_signal"
+  | "political_signal"
+  | "social_dynamic"
+  | "inferred_causality"
+  | "uncertainty"
+  | "unknown";
+
+// ── Meta ──────────────────────────────────────────────────────
 
 export interface CPCMeta {
   cpc_version: string;
@@ -26,30 +44,61 @@ export interface CPCMeta {
   processed_statement_count: number;
 }
 
+// ── Cognitive Summary ─────────────────────────────────────────
+
 export interface CognitiveSummary {
   dominant_narrative: string;
   key_blind_spots: string[];
   decision_vulnerability_level: VulnerabilityLevel;
+  group_epistemic_profile: string;
 }
+
+// ── Cleaned Statements (now with epistemic classification) ────
 
 export interface CleanedStatement {
   id: number;
   original_verbatim_index: number;
   statement: string;
+  epistemic_type: EpistemicType;
+  epistemic_confidence: number;
 }
+
+// ── Biases (now with category) ────────────────────────────────
 
 export interface DetectedBias {
   id: number;
   statement_id: number;
   statement: string;
-  bias_detected: string;        // snake_case
-  bias_label: string;           // Human-readable
+  bias_detected: string;
+  bias_label: string;
+  bias_category: BiasCategory;
   probability: 1 | 2 | 3 | 4;
   impact: 1 | 2 | 3 | 4;
-  risk_score: number;           // probability × impact
-  confidence: number;           // 0.0 – 1.0
+  risk_score: number;
+  confidence: number;
   rationale: string;
 }
+
+// ── Social Dynamics (new) ─────────────────────────────────────
+
+export interface SocialDynamic {
+  dynamic: string;
+  severity: 1 | 2 | 3 | 4 | 5;
+  evidence: string[];
+}
+
+// ── Unknowns & Blindspots (new) ───────────────────────────────
+
+export interface UnknownsAndBlindspots {
+  unknown_unknowns: string[];
+  invisible_dependencies: string[];
+  missing_stakeholders: string[];
+  unchallenged_assumptions: string[];
+  absent_information: string[];
+  silent_failure_paths: string[];
+}
+
+// ── Top Risks ─────────────────────────────────────────────────
 
 export interface TopRisk {
   rank: number;
@@ -59,6 +108,29 @@ export interface TopRisk {
   priority_rationale: string;
 }
 
+// ── Contradictions (new) ──────────────────────────────────────
+
+export interface Contradiction {
+  id: number;
+  statement_a: string;
+  statement_b: string;
+  contradiction_type: ContradictionType;
+  severity: Severity;
+  implication: string;
+}
+
+// ── Decision Fragility (new) ──────────────────────────────────
+
+export interface DecisionFragility {
+  score: number;                        // 0.0–10.0
+  primary_failure_mode: string;
+  dominant_bias_cluster: string[];
+  resilience_level: ResilienceLevel;
+  fragility_rationale: string;
+}
+
+// ── Adversarial Scenarios (enhanced) ─────────────────────────
+
 export interface AdversarialScenario {
   id: number;
   title: string;
@@ -66,40 +138,61 @@ export interface AdversarialScenario {
   trigger_condition: string;
   affected_biases: string[];
   severity: Severity;
+  source_layer: SourceLayer;
 }
+
+// ── Temporal Simulation (second-order) ───────────────────────
 
 export interface TemporalSimulation {
   horizon: "T+3";
-  unintended_consequences: string[];
-  emergent_risks: string[];
+  first_order: {
+    unintended_consequences: string[];
+    emergent_risks: string[];
+  };
+  second_order: {
+    actor_adaptations: string[];
+    defensive_behaviors: string[];
+    organizational_drift: string[];
+    cognitive_debt: string[];
+    decisional_fatigue_signals: string[];
+  };
   new_biases_introduced: string[];
-  degradation_effects: string[];
+  system_degradation_trajectory: DegradationTrajectory;
 }
+
+// ── Decision Recommendations (enhanced) ──────────────────────
 
 export interface DecisionRecommendation {
   priority: 1 | 2 | 3;
   action: string;
   target_bias: string;
   timeline: Timeline;
+  source_layer: SourceLayer;
 }
+
+// ── Full CPC Output ───────────────────────────────────────────
 
 export interface CPCOutput {
   meta: CPCMeta;
   cognitive_summary: CognitiveSummary;
   cleaned_statements: CleanedStatement[];
   biases: DetectedBias[];
+  social_dynamics: SocialDynamic[];
+  unknowns_and_blindspots: UnknownsAndBlindspots;
   top_risks: TopRisk[];
+  contradictions: Contradiction[];
+  decision_fragility: DecisionFragility;
   adversarial_scenarios: AdversarialScenario[];
   temporal_simulation: TemporalSimulation;
   decision_recommendations: DecisionRecommendation[];
 }
 
-// ── API Response ─────────────────────────────────────────────
+// ── API Response ──────────────────────────────────────────────
 
 export interface AnalyzeResponse {
   ok: true;
   session_id: string;
-  timestamp: string;           // ISO 8601
+  timestamp: string;
   decision: string;
   result: CPCOutput;
 }
@@ -112,30 +205,29 @@ export interface AnalyzeErrorResponse {
 }
 
 export type AnalyzeErrorCode =
-  | "INVALID_INPUT"             // Missing required fields
-  | "TOO_MANY_VERBATIMS"        // > 10 verbatims
-  | "VERBATIM_TOO_LONG"         // Single verbatim > 500 chars
-  | "OPENAI_ERROR"              // OpenAI API failure
-  | "PARSE_ERROR"               // GPT returned invalid JSON
-  | "PIPELINE_INCOMPLETE"       // GPT skipped layers
-  | "INTERNAL_ERROR";           // Unexpected
+  | "INVALID_INPUT"
+  | "TOO_MANY_VERBATIMS"
+  | "VERBATIM_TOO_LONG"
+  | "OPENAI_ERROR"
+  | "PARSE_ERROR"
+  | "PIPELINE_INCOMPLETE"
+  | "INTERNAL_ERROR";
 
-// ── Sheets export contract ───────────────────────────────────
-// Flat row format compatible with Saisie tab (B25:G34)
+// ── Sheets Export (unchanged) ─────────────────────────────────
 
 export interface SaisieRow {
-  row_index: number;            // 1–10, maps to Excel rows 25–34
-  cause_echec: string;          // Cleaned statement (col C in Synthèse)
-  bias_detected: string;        // Bias label (col B in Saisie / col D in Synthèse)
-  probability: number;          // 1–4 (col C in Saisie)
-  impact: number;               // 1–4 (col D in Saisie)
-  risk_score: number;           // Computed (col E in Synthèse)
-  mitigation?: string;          // Manual — col G in Synthèse (left blank)
+  row_index: number;
+  cause_echec: string;
+  bias_detected: string;
+  probability: number;
+  impact: number;
+  risk_score: number;
+  mitigation?: string;
 }
 
 export interface SheetsExportPayload {
   session_id: string;
   decision: string;
   timestamp: string;
-  rows: SaisieRow[];            // Max 10
+  rows: SaisieRow[];
 }

@@ -366,7 +366,7 @@ export default function CPCPage() {
               <p className="cpc-panel-desc">La heatmap et la synthèse ont été mises à jour.</p>
             </div>
             <div className="cpc-export-links">
-              <a href="#" className="cpc-btn-secondary" onClick={(e) => e.preventDefault()}>
+              <a href="https://docs.google.com/spreadsheets/d/11qWh1u3cRfGY2eoSqTRdkHpAcIWwuEhu/edit" className="cpc-btn-secondary" target="_blank" rel="noreferrer">
                 Ouvrir Google Sheets ↗
               </a>
               <button className="cpc-btn-ghost" onClick={resetSession}>Nouvelle session</button>
