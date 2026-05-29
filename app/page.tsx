@@ -263,7 +263,7 @@ export default function CPCPage() {
             </div>
 
             <div className="cpc-actions cpc-actions-split">
-              <button className="cpc-btn-ghost" onClick={() => setStep(1)}>← Retour</button>
+              <button className="cpc-btn-ghost" onClick={() => { setStep(1); setError(null); }}>← Retour</button>
               <button className="cpc-btn-primary" onClick={() => setStep(3)}>
                 Le groupe est prêt →
               </button>
@@ -313,7 +313,7 @@ export default function CPCPage() {
             {error && <p className="cpc-error">{error}</p>}
 
             <div className="cpc-actions cpc-actions-split">
-              <button className="cpc-btn-ghost" onClick={() => setStep(2)}>← Retour</button>
+              <button className="cpc-btn-ghost" onClick={() => { setStep(2); setError(null); }}>← Retour</button>
               <button className="cpc-btn-primary" disabled={!canAnalyze || loading} onClick={runAnalysis}>
                 {loading ? (
                   <span className="cpc-loading">
