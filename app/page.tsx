@@ -9,14 +9,16 @@ import type {
 } from "@/lib/types";
 import { CPCResults } from "@/components/CPCResults";
 
-// ── Step types ────────────────────────────────────────────────
+type Step = 1 | 2 | 3 | 4 | 5;
 
-type Step = 1 | 2 | 3 | 4;
+// Horizons temporels disponibles
+const HORIZONS = ["3 mois", "6 mois", "12 mois", "18 mois"];
 
 interface SessionState {
   decision: string;
   participants: string;
   context: string;
+  horizon: string;
   verbatims: string[];
 }
 
@@ -24,12 +26,17 @@ const EMPTY_SESSION: SessionState = {
   decision: "",
   participants: "",
   context: "",
+  horizon: "6 mois",
   verbatims: ["", ""],
 };
 
-// ─────────────────────────────────────────────────────────────
-// PAGE
-// ─────────────────────────────────────────────────────────────
+// Calcule la date projetée
+function projectedDate(horizon: string): string {
+  const now = new Date();
+  const months = parseInt(horizon);
+  now.setMonth(now.getMonth() + months);
+  return now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+}
 
 export default function CPCPage() {
   const [step, setStep] = useState<Step>(1);
@@ -38,23 +45,16 @@ export default function CPCPage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CPCOutput | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [exported, setExported] = useState(false);
 
-  // ── Verbatim helpers ────────────────────────────────────────
-
+  // ── Verbatims ───────────────────────────────────────────────
   const addVerbatim = () => {
     if (session.verbatims.length >= 10) return;
     setSession((s) => ({ ...s, verbatims: [...s.verbatims, ""] }));
   };
-
   const removeVerbatim = (i: number) => {
     if (session.verbatims.length <= 1) return;
-    setSession((s) => ({
-      ...s,
-      verbatims: s.verbatims.filter((_, idx) => idx !== i),
-    }));
+    setSession((s) => ({ ...s, verbatims: s.verbatims.filter((_, idx) => idx !== i) }));
   };
-
   const updateVerbatim = (i: number, val: string) => {
     setSession((s) => {
       const v = [...s.verbatims];
@@ -63,28 +63,23 @@ export default function CPCPage() {
     });
   };
 
-  // ── Step 1 validation ───────────────────────────────────────
-
-  const canProceedStep1 =
-    session.decision.trim().length >= 10 &&
-    session.decision.trim().length <= 300;
-
-  // ── Step 2 validation ───────────────────────────────────────
-
+  const canProceedStep1 = session.decision.trim().length >= 10 && session.decision.trim().length <= 300;
   const filledVerbatims = session.verbatims.filter((v) => v.trim().length > 0);
   const canAnalyze = filledVerbatims.length >= 1;
 
-  // ── Analyze ─────────────────────────────────────────────────
-
+  // ── Analyse ─────────────────────────────────────────────────
   const runAnalysis = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    // Injecter le cadrage prémortem dans le contexte
+    const premortContext = `CADRAGE PRÉMORTEM : Cette analyse part du principe que la décision a déjà été prise et que le projet a échoué à l'horizon ${session.horizon}. Les verbatims ci-dessous sont des projections d'échec rédigées depuis ce futur hypothétique. ${session.context ? `Contexte additionnel : ${session.context}` : ""}`.trim();
 
     const payload: AnalyzeRequest = {
       decision: session.decision.trim(),
       verbatims: filledVerbatims,
       participants: session.participants ? parseInt(session.participants) : undefined,
-      context: session.context.trim() || undefined,
+      context: premortContext,
     };
 
     try {
@@ -93,18 +88,15 @@ export default function CPCPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
       const data: AnalyzeResponse | AnalyzeErrorResponse = await res.json();
-
       if (!data.ok) {
         setError((data as AnalyzeErrorResponse).error);
         setLoading(false);
         return;
       }
-
       setResult((data as AnalyzeResponse).result);
       setSessionId((data as AnalyzeResponse).session_id);
-      setStep(3);
+      setStep(4);
     } catch {
       setError("Erreur réseau — vérifiez votre connexion.");
     } finally {
@@ -112,28 +104,45 @@ export default function CPCPage() {
     }
   }, [session, filledVerbatims]);
 
-  // ── Export (stub — branché sur /api/export à l'étape C) ─────
-
+  // ── Export ───────────────────────────────────────────────────
   const handleExport = async () => {
-    // TODO: POST to /api/export with result + session mapping to Sheets
-    setExported(true);
-    setStep(4);
+    if (!result || !sessionId) return;
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ok: true,
+          session_id: sessionId,
+          timestamp: new Date().toISOString(),
+          decision: session.decision,
+          result,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) { setError(data.error); return; }
+      setStep(5);
+    } catch {
+      setError("Erreur lors de l'export — réessayez.");
+    }
   };
-
-  // ── Reset ───────────────────────────────────────────────────
 
   const resetSession = () => {
     setStep(1);
     setSession(EMPTY_SESSION);
     setResult(null);
     setSessionId(null);
-    setExported(false);
     setError(null);
   };
 
-  // ─────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────
+  // ── Steps nav labels ─────────────────────────────────────────
+  const stepLabels = [
+    { n: 1, label: "Décision" },
+    { n: 2, label: "Prémortem" },
+    { n: 3, label: "Verbatims" },
+    { n: 4, label: "Analyse" },
+    { n: 5, label: "Export" },
+  ];
 
   return (
     <main className="cpc-root">
@@ -145,12 +154,7 @@ export default function CPCPage() {
             <span className="cpc-logo-sub">Cognitive Premortem Copilot</span>
           </div>
           <nav className="cpc-steps-nav">
-            {[
-              { n: 1, label: "Contexte" },
-              { n: 2, label: "Verbatims" },
-              { n: 3, label: "Analyse" },
-              { n: 4, label: "Export" },
-            ].map(({ n, label }) => (
+            {stepLabels.map(({ n, label }) => (
               <div
                 key={n}
                 className={`cpc-step-dot ${step === n ? "active" : ""} ${step > n ? "done" : ""}`}
@@ -163,17 +167,16 @@ export default function CPCPage() {
         </div>
       </header>
 
-      {/* Content */}
       <div className="cpc-body">
 
-        {/* ── STEP 1 — Context ─────────────────────────────── */}
+        {/* ── STEP 1 — Décision ────────────────────────────── */}
         {step === 1 && (
           <section className="cpc-panel">
             <div className="cpc-panel-header">
               <span className="cpc-panel-index">01</span>
               <h1 className="cpc-panel-title">Décision analysée</h1>
               <p className="cpc-panel-desc">
-                Décrivez précisément la décision soumise à l'analyse cognitive.
+                Décrivez la décision soumise à l'analyse cognitive.
               </p>
             </div>
 
@@ -188,71 +191,94 @@ export default function CPCPage() {
                 maxLength={300}
                 placeholder="Ex. : Lancer le produit en Q3 sans validation utilisateur supplémentaire"
                 value={session.decision}
-                onChange={(e) =>
-                  setSession((s) => ({ ...s, decision: e.target.value }))
-                }
+                onChange={(e) => setSession((s) => ({ ...s, decision: e.target.value }))}
               />
-              <span className="cpc-char-count">
-                {session.decision.length} / 300
-              </span>
+              <span className="cpc-char-count">{session.decision.length} / 300</span>
             </div>
 
             <div className="cpc-row">
               <div className="cpc-field">
-                <label className="cpc-label" htmlFor="participants">
-                  Participants
-                </label>
+                <label className="cpc-label" htmlFor="participants">Participants</label>
                 <input
-                  id="participants"
-                  type="number"
-                  min={1}
-                  max={50}
-                  className="cpc-input"
-                  placeholder="Ex. : 6"
+                  id="participants" type="number" min={1} max={50}
+                  className="cpc-input" placeholder="Ex. : 6"
                   value={session.participants}
-                  onChange={(e) =>
-                    setSession((s) => ({ ...s, participants: e.target.value }))
-                  }
+                  onChange={(e) => setSession((s) => ({ ...s, participants: e.target.value }))}
                 />
               </div>
               <div className="cpc-field cpc-field-grow">
-                <label className="cpc-label" htmlFor="context">
-                  Contexte (optionnel)
-                </label>
+                <label className="cpc-label" htmlFor="context">Contexte (optionnel)</label>
                 <input
-                  id="context"
-                  type="text"
-                  className="cpc-input"
+                  id="context" type="text" className="cpc-input"
                   placeholder="Ex. : Startup SaaS B2B, Série A, équipe de 12"
                   value={session.context}
-                  onChange={(e) =>
-                    setSession((s) => ({ ...s, context: e.target.value }))
-                  }
+                  onChange={(e) => setSession((s) => ({ ...s, context: e.target.value }))}
                 />
               </div>
             </div>
 
             <div className="cpc-actions">
-              <button
-                className="cpc-btn-primary"
-                disabled={!canProceedStep1}
-                onClick={() => setStep(2)}
-              >
+              <button className="cpc-btn-primary" disabled={!canProceedStep1} onClick={() => setStep(2)}>
                 Continuer →
               </button>
             </div>
           </section>
         )}
 
-        {/* ── STEP 2 — Verbatims ───────────────────────────── */}
+        {/* ── STEP 2 — Cadrage prémortem ───────────────────── */}
         {step === 2 && (
           <section className="cpc-panel">
             <div className="cpc-panel-header">
               <span className="cpc-panel-index">02</span>
-              <h1 className="cpc-panel-title">Verbatims participants</h1>
+              <h1 className="cpc-panel-title">Cadrage prémortem</h1>
               <p className="cpc-panel-desc">
-                Saisissez les prises de position brutes du groupe (1 à 10).
-                <br />
+                Avant de saisir les verbatims, lisez ce cadrage à voix haute à l'ensemble du groupe.
+              </p>
+            </div>
+
+            <div className="cpc-premortem-box">
+              <span className="cpc-premortem-label">Instructions pour le groupe</span>
+              <p className="cpc-premortem-text">
+                Nous sommes en <strong>{projectedDate(session.horizon)}</strong>. La décision a été prise.
+                <br /><br />
+                <strong>Le projet a échoué.</strong>
+                <br /><br />
+                Partant de ce constat, chaque participant va décrire en 2 à 3 phrases ce qui s'est passé.
+                Pas de questions, pas de discussions — uniquement des projections individuelles et silencieuses.
+                <br /><br />
+                Répondez à : <strong>"Qu'est-ce qui a conduit à cet échec ?"</strong>
+              </p>
+              <div className="cpc-horizon-row">
+                <span className="cpc-horizon-label">Horizon temporel :</span>
+                <select
+                  className="cpc-horizon-select"
+                  value={session.horizon}
+                  onChange={(e) => setSession((s) => ({ ...s, horizon: e.target.value }))}
+                >
+                  {HORIZONS.map((h) => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="cpc-actions cpc-actions-split">
+              <button className="cpc-btn-ghost" onClick={() => setStep(1)}>← Retour</button>
+              <button className="cpc-btn-primary" onClick={() => setStep(3)}>
+                Le groupe est prêt →
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* ── STEP 3 — Verbatims ───────────────────────────── */}
+        {step === 3 && (
+          <section className="cpc-panel">
+            <div className="cpc-panel-header">
+              <span className="cpc-panel-index">03</span>
+              <h1 className="cpc-panel-title">Projections d'échec</h1>
+              <p className="cpc-panel-desc">
+                Saisissez les verbatims individuels (1 à 10).<br />
                 <span className="cpc-panel-decision">
                   Décision : {session.decision}
                 </span>
@@ -265,92 +291,65 @@ export default function CPCPage() {
                   <span className="cpc-verbatim-index">{i + 1}</span>
                   <textarea
                     className="cpc-textarea cpc-verbatim-input"
-                    rows={2}
-                    maxLength={500}
-                    placeholder={`Verbatim ${i + 1}…`}
+                    rows={2} maxLength={500}
+                    placeholder={`Projection ${i + 1} — "Ce qui s'est passé, c'est que…"`}
                     value={v}
                     onChange={(e) => updateVerbatim(i, e.target.value)}
                   />
                   {session.verbatims.length > 1 && (
-                    <button
-                      className="cpc-btn-ghost cpc-remove"
-                      onClick={() => removeVerbatim(i)}
-                      aria-label="Supprimer"
-                    >
-                      ×
-                    </button>
+                    <button className="cpc-btn-ghost cpc-remove" onClick={() => removeVerbatim(i)} aria-label="Supprimer">×</button>
                   )}
                 </div>
               ))}
             </div>
 
             <div className="cpc-verbatims-footer">
-              <button
-                className="cpc-btn-ghost"
-                disabled={session.verbatims.length >= 10}
-                onClick={addVerbatim}
-              >
-                + Ajouter un verbatim{" "}
-                <span className="cpc-count-hint">
-                  ({session.verbatims.length}/10)
-                </span>
+              <button className="cpc-btn-ghost" disabled={session.verbatims.length >= 10} onClick={addVerbatim}>
+                + Ajouter une projection{" "}
+                <span className="cpc-count-hint">({session.verbatims.length}/10)</span>
               </button>
             </div>
 
             {error && <p className="cpc-error">{error}</p>}
 
             <div className="cpc-actions cpc-actions-split">
-              <button
-                className="cpc-btn-ghost"
-                onClick={() => setStep(1)}
-              >
-                ← Retour
-              </button>
-              <button
-                className="cpc-btn-primary"
-                disabled={!canAnalyze || loading}
-                onClick={runAnalysis}
-              >
+              <button className="cpc-btn-ghost" onClick={() => setStep(2)}>← Retour</button>
+              <button className="cpc-btn-primary" disabled={!canAnalyze || loading} onClick={runAnalysis}>
                 {loading ? (
                   <span className="cpc-loading">
                     <span className="cpc-spinner" />
                     Analyse en cours…
                   </span>
-                ) : (
-                  `Lancer l'analyse CPC →`
-                )}
+                ) : "Lancer l'analyse CPC →"}
               </button>
             </div>
           </section>
         )}
 
-        {/* ── STEP 3 — Results ─────────────────────────────── */}
-        {step === 3 && result && (
+        {/* ── STEP 4 — Résultats ───────────────────────────── */}
+        {step === 4 && result && (
           <section className="cpc-results-section">
             <div className="cpc-results-header">
               <div>
-                <span className="cpc-panel-index">03</span>
+                <span className="cpc-panel-index">04</span>
                 <h1 className="cpc-panel-title">Résultats CPC</h1>
                 <p className="cpc-panel-desc">
-                  Vérifiez et validez les outputs avant export.
-                  <br />
-                  <span className="cpc-session-id">
-                    Session : {sessionId}
-                  </span>
+                  Vérifiez et validez les outputs avant export.<br />
+                  <span className="cpc-session-id">Session : {sessionId}</span>
                 </p>
               </div>
               <div className="cpc-validate-banner">
-                <span className="cpc-validate-icon">⚠</span>
+                <span>⚠</span>
                 L'IA propose — vous validez avant tout export.
               </div>
             </div>
 
             <CPCResults result={result} />
 
+            {error && <p className="cpc-error" style={{ marginTop: "1rem" }}>{error}</p>}
+
             <div className="cpc-actions cpc-actions-split cpc-actions-results">
-              <button className="cpc-btn-ghost" onClick={() => setStep(2)}>
-                ← Modifier les verbatims
-              </button>
+              <button className="cpc-btn-ghost" onClick={() => setStep(3)}>← Modifier les verbatims</button>
               <button className="cpc-btn-primary" onClick={handleExport}>
                 Exporter vers Google Sheets →
               </button>
@@ -358,31 +357,23 @@ export default function CPCPage() {
           </section>
         )}
 
-        {/* ── STEP 4 — Export ──────────────────────────────── */}
-        {step === 4 && (
+        {/* ── STEP 5 — Export confirmé ─────────────────────── */}
+        {step === 5 && (
           <section className="cpc-panel cpc-panel-export">
             <div className="cpc-export-success">
               <span className="cpc-export-check">✓</span>
               <h1 className="cpc-panel-title">Export confirmé</h1>
-              <p className="cpc-panel-desc">
-                La heatmap et la synthèse ont été mises à jour.
-              </p>
+              <p className="cpc-panel-desc">La heatmap et la synthèse ont été mises à jour.</p>
             </div>
-
             <div className="cpc-export-links">
-              <a
-                href="#"
-                className="cpc-btn-secondary"
-                onClick={(e) => e.preventDefault()}
-              >
+              <a href="#" className="cpc-btn-secondary" onClick={(e) => e.preventDefault()}>
                 Ouvrir Google Sheets ↗
               </a>
-              <button className="cpc-btn-ghost" onClick={resetSession}>
-                Nouvelle session
-              </button>
+              <button className="cpc-btn-ghost" onClick={resetSession}>Nouvelle session</button>
             </div>
           </section>
         )}
+
       </div>
     </main>
   );
