@@ -1,45 +1,16 @@
 // ─────────────────────────────────────────────────────────────
-// /api/analyze — CPC Cognitive Engine
-//
-// Vercel Serverless Function (Next.js App Router)
-// Runtime : Node.js (Edge-compatible with minor changes)
-// Method  : POST
-// Auth    : None (prototype — add bearer token for production)
-//
-// Flow:
-//   1. Validate request
-//   2. Build GPT messages (system prompt + user context)
-//   3. Call OpenAI gpt-4o
-//   4. Parse + validate JSON response
-//   5. Return typed AnalyzeResponse
+// /api/export — Google Sheets Connector
+// Dégrade proprement si les credentials ne sont pas configurés
 // ─────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
-import { CPC_SYSTEM_PROMPT, CPC_VERSION, buildUserMessage } from "@/lib/cpc-prompt";
-import type {
-  AnalyzeRequest,
-  AnalyzeResponse,
-  AnalyzeErrorResponse,
-  CPCOutput,
-} from "@/lib/types";
+import { buildSheetsPayload } from "@/lib/sheets-mapper";
+import type { AnalyzeResponse, SheetsExportPayload } from "@/lib/types";
 
-// ── Constants ────────────────────────────────────────────────
-
-const MAX_VERBATIMS = 10;
-const MAX_VERBATIM_LENGTH = 500;
-const MAX_DECISION_LENGTH = 300;
-const OPENAI_MODEL = "gpt-4o";
-const OPENAI_MAX_TOKENS = 4096;
-const OPENAI_TEMPERATURE = 0.3;   // Low for reproducibility
-
-// ── Client (singleton) ───────────────────────────────────────
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// ── Handler ──────────────────────────────────────────────────
+const SHEET_ID = process.env.GOOGLE_SHEET_ID ?? "";
+const SAISIE_START = 25;
+const SYNTHESE_START = 6;
+const MAX_ROWS = 10;
 
 export async function POST(req: NextRequest) {
   // 1. Parse body
@@ -47,203 +18,148 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return error("INVALID_INPUT", "Request body must be valid JSON");
+    return err(400, "INVALID_INPUT", "Body must be valid JSON");
   }
 
-  // 2. Validate input
-  const validation = validateRequest(body);
-  if (!validation.ok) {
-    return error(validation.code, validation.message);
-  }
-
-  const { decision, verbatims, participants, context } =
-    validation.data as AnalyzeRequest;
-
-  // 3. Generate session ID
-  const session_id =
-    (validation.data as AnalyzeRequest).session_id ??
-    `cpc_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}_${Math.random()
-      .toString(36)
-      .slice(2, 7)}`;
-
-  // 4. Build messages
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content: CPC_SYSTEM_PROMPT,
-    },
-    {
-      role: "user",
-      content: buildUserMessage({ decision, verbatims, participants, context }),
-    },
-  ];
-
-  // 5. Call OpenAI
-  let rawContent: string;
+  // 2. Normalize payload
+  let payload: SheetsExportPayload;
   try {
-    const completion = await openai.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      max_tokens: OPENAI_MAX_TOKENS,
-      temperature: OPENAI_TEMPERATURE,
-      response_format: { type: "json_object" }, // Enforce JSON mode
+    payload = normalizePayload(body);
+  } catch (e) {
+    return err(400, "INVALID_INPUT", e instanceof Error ? e.message : "Invalid payload");
+  }
+
+  // 3. Check credentials — si pas configurés, retour succès sans écriture
+  const sheetsConfigured =
+    SHEET_ID &&
+    SHEET_ID !== "placeholder" &&
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON &&
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON !== "placeholder";
+
+  if (!sheetsConfigured) {
+    // Mode prototype : export simulé
+    return NextResponse.json({
+      ok: true,
+      session_id: payload.session_id,
+      rows_written: payload.rows.length,
+      tabs_updated: ["Saisie", "Synthese"],
+      mode: "simulated",
+      message: "Google Sheets non configuré — export simulé pour le prototype",
+      timestamp: new Date().toISOString(),
     });
-
-    rawContent = completion.choices[0]?.message?.content ?? "";
-
-    if (!rawContent) {
-      return error("OPENAI_ERROR", "Empty response from OpenAI");
-    }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Unknown OpenAI error";
-    console.error("[CPC] OpenAI call failed:", msg);
-    return error("OPENAI_ERROR", msg);
   }
 
-  // 6. Parse JSON
-  let parsed: CPCOutput;
+  // 4. Import googleapis dynamiquement (évite l'erreur si non installé)
+  let google: typeof import("googleapis").google;
   try {
-    parsed = JSON.parse(rawContent) as CPCOutput;
+    const mod = await import("googleapis");
+    google = mod.google;
   } catch {
-    console.error("[CPC] JSON parse failed. Raw content:", rawContent.slice(0, 500));
-    return error("PARSE_ERROR", "GPT returned malformed JSON", rawContent.slice(0, 300));
+    return err(500, "DEPENDENCY_ERROR", "googleapis non disponible");
   }
 
-  // 7. Validate pipeline completeness
-  const pipelineCheck = validatePipelineOutput(parsed);
-  if (!pipelineCheck.ok) {
-    return error("PIPELINE_INCOMPLETE", pipelineCheck.message);
+  // 5. Auth
+  let credentials: object;
+  try {
+    credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON!);
+  } catch {
+    return err(500, "AUTH_ERROR", "GOOGLE_SERVICE_ACCOUNT_JSON invalide");
   }
 
-  // 8. Stamp version (ensure it matches even if GPT hallucinates a different one)
-  parsed.meta.cpc_version = CPC_VERSION;
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
 
-  // 9. Return
-  const response: AnalyzeResponse = {
+  // 6. Write to Sheets
+  try {
+    const sheets = google.sheets({ version: "v4", auth });
+    const writes = buildSheetWrites(payload);
+
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: writes,
+      },
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Sheets write failed";
+    console.error("[CPC] Sheets error:", msg);
+    return err(502, "SHEETS_ERROR", msg);
+  }
+
+  return NextResponse.json({
     ok: true,
-    session_id,
+    session_id: payload.session_id,
+    rows_written: payload.rows.length,
+    tabs_updated: ["Saisie", "Synthese"],
+    mode: "live",
     timestamp: new Date().toISOString(),
-    decision,
-    result: parsed,
-  };
-
-  return NextResponse.json(response, { status: 200 });
+  });
 }
 
-// ── Input validation ─────────────────────────────────────────
+// ── Payload normalization ─────────────────────────────────────
 
-function validateRequest(body: unknown):
-  | { ok: true; data: AnalyzeRequest }
-  | { ok: false; code: AnalyzeErrorResponse["code"]; message: string } {
-
+function normalizePayload(body: unknown): SheetsExportPayload {
   if (typeof body !== "object" || body === null) {
-    return { ok: false, code: "INVALID_INPUT", message: "Body must be an object" };
+    throw new Error("Body must be an object");
   }
-
   const b = body as Record<string, unknown>;
 
-  // decision
-  if (!b.decision || typeof b.decision !== "string" || !b.decision.trim()) {
-    return { ok: false, code: "INVALID_INPUT", message: "Field 'decision' is required" };
+  if (b.ok === true && b.result) {
+    return buildSheetsPayload(body as AnalyzeResponse);
   }
-  if (b.decision.length > MAX_DECISION_LENGTH) {
-    return {
-      ok: false,
-      code: "INVALID_INPUT",
-      message: `Field 'decision' must be under ${MAX_DECISION_LENGTH} characters`,
-    };
+  if (b.session_id && Array.isArray(b.rows)) {
+    return b as unknown as SheetsExportPayload;
   }
+  throw new Error("Format de payload non reconnu");
+}
 
-  // verbatims
-  if (!Array.isArray(b.verbatims) || b.verbatims.length === 0) {
-    return { ok: false, code: "INVALID_INPUT", message: "Field 'verbatims' must be a non-empty array" };
-  }
-  if (b.verbatims.length > MAX_VERBATIMS) {
-    return { ok: false, code: "TOO_MANY_VERBATIMS", message: `Maximum ${MAX_VERBATIMS} verbatims allowed` };
-  }
-  for (let i = 0; i < b.verbatims.length; i++) {
-    if (typeof b.verbatims[i] !== "string" || !b.verbatims[i].trim()) {
-      return { ok: false, code: "INVALID_INPUT", message: `verbatims[${i}] must be a non-empty string` };
-    }
-    if ((b.verbatims[i] as string).length > MAX_VERBATIM_LENGTH) {
-      return {
-        ok: false,
-        code: "VERBATIM_TOO_LONG",
-        message: `verbatims[${i}] exceeds ${MAX_VERBATIM_LENGTH} characters`,
-      };
-    }
-  }
+// ── Sheet writes ──────────────────────────────────────────────
 
-  // optional fields
-  const participants =
-    typeof b.participants === "number" && b.participants > 0
-      ? Math.floor(b.participants)
-      : undefined;
-  const context =
-    typeof b.context === "string" && b.context.trim() ? b.context.trim() : undefined;
-  const session_id =
-    typeof b.session_id === "string" && b.session_id.trim()
-      ? b.session_id.trim()
-      : undefined;
+function buildSheetWrites(payload: SheetsExportPayload) {
+  const rows = payload.rows.slice(0, MAX_ROWS);
 
-  return {
-    ok: true,
-    data: {
-      decision: b.decision.trim(),
-      verbatims: (b.verbatims as string[]).map((v) => v.trim()),
-      participants,
-      context,
-      session_id,
+  const saisieValues: (string | number | null)[][] = Array.from(
+    { length: MAX_ROWS }, () => [null, null, null, null]
+  );
+  rows.forEach((row, i) => {
+    saisieValues[i] = [row.bias_detected, row.probability, row.impact, row.risk_score];
+  });
+
+  const syntheseValues: (string | number | null)[][] = Array.from(
+    { length: MAX_ROWS }, () => [null, null, null, null]
+  );
+  rows.forEach((row, i) => {
+    syntheseValues[i] = [row.cause_echec, row.bias_detected, row.probability, row.impact];
+  });
+
+  return [
+    {
+      range: `Saisie!B${SAISIE_START}:E${SAISIE_START + MAX_ROWS - 1}`,
+      values: saisieValues,
     },
-  };
+    {
+      range: "Saisie!B20",
+      values: [[payload.decision]],
+    },
+    {
+      range: `Synthese!C${SYNTHESE_START}:F${SYNTHESE_START + MAX_ROWS - 1}`,
+      values: syntheseValues,
+    },
+    {
+      range: "Synthese!B2:B3",
+      values: [
+        [payload.session_id],
+        [new Date(payload.timestamp).toLocaleString("fr-FR")],
+      ],
+    },
+  ];
 }
 
-// ── Pipeline output validation ────────────────────────────────
+// ── Error helper ──────────────────────────────────────────────
 
-function validatePipelineOutput(output: CPCOutput):
-  | { ok: true }
-  | { ok: false; message: string } {
-
-  const required = [
-    ["meta", "object"],
-    ["cognitive_summary", "object"],
-    ["cleaned_statements", "array"],
-    ["biases", "array"],
-    ["top_risks", "array"],
-    ["adversarial_scenarios", "array"],
-    ["temporal_simulation", "object"],
-    ["decision_recommendations", "array"],
-  ] as const;
-
-  for (const [field, type] of required) {
-    const val = (output as unknown as Record<string, unknown>)[field];
-    if (type === "array" && !Array.isArray(val)) {
-      return { ok: false, message: `Output missing or invalid field: '${field}'` };
-    }
-    if (type === "object" && (typeof val !== "object" || val === null || Array.isArray(val))) {
-      return { ok: false, message: `Output missing or invalid field: '${field}'` };
-    }
-  }
-
-  if (!output.biases.length) {
-    return { ok: false, message: "Pipeline returned zero biases — likely a truncated response" };
-  }
-
-  return { ok: true };
-}
-
-// ── Error helper ─────────────────────────────────────────────
-
-function error(
-  code: AnalyzeErrorResponse["code"],
-  message: string,
-  details?: string
-) {
-  const body: AnalyzeErrorResponse = { ok: false, error: message, code, details };
-  const status = code === "INVALID_INPUT" || code === "TOO_MANY_VERBATIMS" || code === "VERBATIM_TOO_LONG"
-    ? 400
-    : code === "OPENAI_ERROR"
-    ? 502
-    : 500;
-  return NextResponse.json(body, { status });
+function err(status: number, code: string, message: string) {
+  return NextResponse.json({ ok: false, error: message, code }, { status });
 }
