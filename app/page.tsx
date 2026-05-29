@@ -349,7 +349,7 @@ export default function CPCPage() {
             {error && <p className="cpc-error" style={{ marginTop: "1rem" }}>{error}</p>}
 
             <div className="cpc-actions cpc-actions-split cpc-actions-results">
-              <button className="cpc-btn-ghost" onClick={() => setStep(3)}>← Modifier les verbatims</button>
+              <button className="cpc-btn-ghost" onClick={() => { setStep(3); setError(null); }}>← Modifier les verbatims</button>
               <button className="cpc-btn-primary" onClick={handleExport}>
                 Exporter vers Google Sheets →
               </button>
