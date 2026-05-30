@@ -381,3 +381,52 @@ body {
   .cpc-results-header { flex-direction: column; }
   .cpc-adversarial-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Lang toggle ─────────────────────────────────────────────── */
+.cpc-header-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.cpc-lang-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0.5px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+.cpc-lang-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+
+.cpc-lang-btn.active {
+  color: #EB642A;
+}
+
+.cpc-lang-btn:hover {
+  color: rgba(255,255,255,0.8);
+}
+
+.cpc-lang-sep {
+  color: rgba(255,255,255,0.2);
+  font-size: 11px;
+}
+
+/* ── Logo sep ─────────────────────────────────────────────────── */
+.cpc-logo-sep {
+  color: rgba(255,255,255,0.2);
+  font-size: 14px;
+  margin: 0 4px;
+}
